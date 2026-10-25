@@ -1,0 +1,29 @@
+# Project settings. Change values here instead of editing code.
+# Indentation uses 2 spaces. Never use the Tab key in this file.
+
+data:
+  # File name is an assumption; confirm it when we download the dataset.
+  raw_path: data/raw/online_retail_II.xlsx
+  # null means "read every sheet in the workbook".
+  sheet_names: null
+  processed_dir: data/processed
+
+schema:
+  # Column names we expect in UCI Online Retail II (to be verified on the real file).
+  required_columns:
+    - Invoice
+    - StockCode
+    - Description
+    - Quantity
+    - InvoiceDate
+    - Price
+    - Customer ID
+    - Country
+
+cleaning:
+  # Invoices starting with this letter are treated as cancellations/returns.
+  cancellation_invoice_prefix: "C"
+  # Non-product codes (postage, fees, etc.). Left empty until we inspect the real data.
+  non_product_stock_codes: []
+  # flag = mark exact duplicate rows but keep them; drop = remove them.
+  duplicate_policy: flag

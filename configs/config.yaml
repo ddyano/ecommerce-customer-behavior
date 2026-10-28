@@ -1,15 +1,17 @@
 # Project settings. Change values here instead of editing code.
 # Indentation uses 2 spaces. Never use the Tab key in this file.
+# Quote every stock code and prefix: unquoted values such as Y or N can be
+# read by YAML as true/false.
 
 data:
-  # File name is an assumption; confirm it when we download the dataset.
+  # Confirmed against the real UCI file.
   raw_path: data/raw/online_retail_II.xlsx
   # null means "read every sheet in the workbook".
   sheet_names: null
   processed_dir: data/processed
 
 schema:
-  # Column names we expect in UCI Online Retail II (to be verified on the real file).
+  # Column names confirmed in the real UCI Online Retail II workbook.
   required_columns:
     - Invoice
     - StockCode
@@ -21,9 +23,55 @@ schema:
     - Country
 
 cleaning:
-  # Invoices starting with this letter are treated as cancellations/returns.
+  # Invoices starting with this letter are cancellations/returns.
   cancellation_invoice_prefix: "C"
-  # Non-product codes (postage, fees, etc.). Left empty until we inspect the real data.
-  non_product_stock_codes: []
-  # flag = mark exact duplicate rows but keep them; drop = remove them.
+
+  # flag = mark exact duplicate rows but keep them; drop = exclude them.
   duplicate_policy: flag
+
+  # keep_earlier_sheet = if an invoice appears in more than one sheet, keep the
+  #   earliest sheet's rows and exclude the later copy, BUT only when the rows
+  #   of every shared invoice are identical in both sheets. If any differ,
+  #   cleaning stops with an error and removes nothing.
+  # keep_all = keep every sheet's rows (overlapping invoices are counted twice).
+  overlap_policy: keep_earlier_sheet
+
+  # return = cancellation rows with negative quantity are retained as returns.
+  # exclude = every cancellation row is excluded (voucher cancellations too).
+  cancellation_policy: return
+
+  # exclude = rows with Price == 0 are excluded; keep = they continue to the
+  # remaining rules.
+  zero_price_policy: exclude
+
+  # Codes excluded from product and basket analysis. Matching is exact and
+  # case-sensitive. Listed codes are checked before the price, quantity and
+  # cancellation rules, so they are excluded on any invoice type.
+  non_product_stock_codes:
+    - "POST"
+    - "DOT"
+    - "M"
+    - "m"
+    - "C2"
+    - "D"
+    - "S"
+    - "BANK CHARGES"
+    - "ADJUST"
+    - "ADJUST2"
+    - "AMAZONFEE"
+    - "CRUK"
+    - "B"
+    - "TEST001"
+    - "TEST002"
+
+  # Codes that cannot be identified as products.
+  unidentifiable_stock_codes:
+    - "DCGSSGIRL"
+    - "DCGSSBOY"
+
+  # Gift vouchers are retained in the audit output with their own reason, are
+  # never counted as merchandise sales, returns or basket items, and are
+  # reported separately in the revenue report. A listed code above may not
+  # start with one of these prefixes.
+  voucher_stock_code_prefixes:
+    - "gift_0001_"

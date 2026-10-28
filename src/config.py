@@ -13,7 +13,15 @@ import yaml
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH: Path = PROJECT_ROOT / "configs" / "config.yaml"
+
 VALID_DUPLICATE_POLICIES: tuple[str, ...] = ("flag", "drop")
+VALID_OVERLAP_POLICIES: tuple[str, ...] = ("keep_earlier_sheet", "keep_all")
+VALID_CANCELLATION_POLICIES: tuple[str, ...] = ("return", "exclude")
+VALID_ZERO_PRICE_POLICIES: tuple[str, ...] = ("exclude", "keep")
+
+DEFAULT_OVERLAP_POLICY: str = "keep_earlier_sheet"
+DEFAULT_CANCELLATION_POLICY: str = "return"
+DEFAULT_ZERO_PRICE_POLICY: str = "exclude"
 
 
 class ConfigError(ValueError):
@@ -37,6 +45,11 @@ class CleaningConfig:
     cancellation_invoice_prefix: str
     non_product_stock_codes: tuple[str, ...]
     duplicate_policy: str
+    overlap_policy: str = DEFAULT_OVERLAP_POLICY
+    cancellation_policy: str = DEFAULT_CANCELLATION_POLICY
+    zero_price_policy: str = DEFAULT_ZERO_PRICE_POLICY
+    unidentifiable_stock_codes: tuple[str, ...] = ()
+    voucher_stock_code_prefixes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +70,22 @@ def _require_key(section: dict[str, Any], section_name: str, key: str) -> Any:
     if key not in section:
         raise ConfigError(f"Missing setting '{section_name}.{key}' in the config file.")
     return section[key]
+
+
+def _read_choice(
+    section: dict[str, Any],
+    section_name: str,
+    key: str,
+    valid: tuple[str, ...],
+    default: str,
+) -> str:
+    """Read an optional setting that must be one of a fixed set of choices."""
+    value = section.get(key, default)
+    if value not in valid:
+        raise ConfigError(
+            f"'{section_name}.{key}' must be one of {list(valid)}, got {value!r}."
+        )
+    return value
 
 
 def _as_string_tuple(
@@ -82,6 +111,16 @@ def _as_string_tuple(
     if len(set(items)) != len(items):
         raise ConfigError(f"'{label}' contains duplicate values.")
     return tuple(items)
+
+
+def _optional_string_tuple(
+    section: dict[str, Any], key: str, label: str, *, coerce_ints: bool = False
+) -> tuple[str, ...]:
+    """Read an optional list setting; a missing or null value means 'empty'."""
+    value = section.get(key)
+    if value is None:
+        return ()
+    return _as_string_tuple(value, label, allow_empty=True, coerce_ints=coerce_ints)
 
 
 def _resolve_inside_project(project_root: Path, value: Any, label: str) -> Path:
@@ -153,15 +192,62 @@ def load_config(
             "'cleaning.duplicate_policy' must be one of "
             f"{list(VALID_DUPLICATE_POLICIES)}, got {policy!r}."
         )
+
+    non_product = _as_string_tuple(
+        _require_key(cleaning, "cleaning", "non_product_stock_codes"),
+        "cleaning.non_product_stock_codes",
+        allow_empty=True,
+        coerce_ints=True,
+    )
+    unidentifiable = _optional_string_tuple(
+        cleaning,
+        "unidentifiable_stock_codes",
+        "cleaning.unidentifiable_stock_codes",
+        coerce_ints=True,
+    )
+    in_both = sorted(set(non_product) & set(unidentifiable))
+    if in_both:
+        raise ConfigError(
+            f"Stock code(s) {in_both} appear in both "
+            "'cleaning.non_product_stock_codes' and "
+            "'cleaning.unidentifiable_stock_codes'."
+        )
+
+    voucher_prefixes = _optional_string_tuple(
+        cleaning,
+        "voucher_stock_code_prefixes",
+        "cleaning.voucher_stock_code_prefixes",
+    )
+    ambiguous = sorted(
+        code
+        for code in (*non_product, *unidentifiable)
+        if any(code.startswith(voucher_prefix) for voucher_prefix in voucher_prefixes)
+    )
+    if ambiguous:
+        raise ConfigError(
+            f"Stock code(s) {ambiguous} are listed as excluded codes but also start "
+            "with a prefix in 'cleaning.voucher_stock_code_prefixes'. "
+            "A code may be one or the other, not both."
+        )
+
     cleaning_config = CleaningConfig(
         cancellation_invoice_prefix=prefix,
-        non_product_stock_codes=_as_string_tuple(
-            _require_key(cleaning, "cleaning", "non_product_stock_codes"),
-            "cleaning.non_product_stock_codes",
-            allow_empty=True,
-            coerce_ints=True,
-        ),
+        non_product_stock_codes=non_product,
         duplicate_policy=policy,
+        overlap_policy=_read_choice(
+            cleaning, "cleaning", "overlap_policy",
+            VALID_OVERLAP_POLICIES, DEFAULT_OVERLAP_POLICY,
+        ),
+        cancellation_policy=_read_choice(
+            cleaning, "cleaning", "cancellation_policy",
+            VALID_CANCELLATION_POLICIES, DEFAULT_CANCELLATION_POLICY,
+        ),
+        zero_price_policy=_read_choice(
+            cleaning, "cleaning", "zero_price_policy",
+            VALID_ZERO_PRICE_POLICIES, DEFAULT_ZERO_PRICE_POLICY,
+        ),
+        unidentifiable_stock_codes=unidentifiable,
+        voucher_stock_code_prefixes=voucher_prefixes,
     )
 
     return AppConfig(data=data_config, schema=schema_config, cleaning=cleaning_config)

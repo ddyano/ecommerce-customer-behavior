@@ -1,7 +1,8 @@
 """Measure how two workbook sheets overlap in time and in content.
 
 READ-ONLY: counts and compares rows; never modifies, filters or removes data.
-The result informs the cleaning rule for the overlapping period.
+`find_mismatched_invoices` is the single shared comparison used both by the
+overlap report and by the cleaning step.
 """
 from __future__ import annotations
 
@@ -31,6 +32,43 @@ class OverlapReport:
     window_invoices_only_in_second: int
 
 
+def find_mismatched_invoices(
+    df: pd.DataFrame,
+    first_sheet: str,
+    second_sheet: str,
+    required_columns: Sequence[str],
+) -> tuple[set, set[str]]:
+    """Return (invoices present in both sheets, invoices whose rows differ).
+
+    For every shared invoice the multiset of complete rows (all required
+    columns, compared as text, missing values equal to each other) must be
+    identical in both sheets. A changed value, a missing row or an extra row
+    makes the invoice a mismatch. Nothing is modified.
+    """
+    keys = list(dict.fromkeys(["Invoice", *required_columns]))
+    validate_schema(list(df.columns), [*keys, SOURCE_COLUMN], "overlap input")
+
+    is_first = df[SOURCE_COLUMN] == first_sheet
+    is_second = df[SOURCE_COLUMN] == second_sheet
+    shared = set(df.loc[is_first, "Invoice"].dropna()) & set(
+        df.loc[is_second, "Invoice"].dropna()
+    )
+    if not shared:
+        return shared, set()
+
+    in_scope = df["Invoice"].isin(shared) & (is_first | is_second)
+    subset = df.loc[in_scope, keys + [SOURCE_COLUMN]].astype("string").fillna("<NA>")
+    counts = (
+        subset.groupby(keys + [SOURCE_COLUMN])
+        .size()
+        .unstack(SOURCE_COLUMN, fill_value=0)
+        .reindex(columns=[first_sheet, second_sheet], fill_value=0)
+    )
+    mismatch = counts[first_sheet] != counts[second_sheet]
+    different = {str(v) for v in counts.index[mismatch].get_level_values("Invoice")}
+    return shared, different
+
+
 def measure_sheet_overlap(
     df: pd.DataFrame, required_columns: Sequence[str]
 ) -> OverlapReport | None:
@@ -50,26 +88,11 @@ def measure_sheet_overlap(
         )
 
     first, second = sheets
-    keys = list(required_columns)
     is_first = df[SOURCE_COLUMN] == first
     is_second = df[SOURCE_COLUMN] == second
 
-    shared = set(df.loc[is_first, "Invoice"]) & set(df.loc[is_second, "Invoice"])
+    shared, different = find_mismatched_invoices(df, first, second, required_columns)
     in_shared = df["Invoice"].isin(shared)
-
-    different: set[str] = set()
-    if shared:
-        subset = (
-            df.loc[in_shared, keys + [SOURCE_COLUMN]].astype("string").fillna("<NA>")
-        )
-        counts = (
-            subset.groupby(keys + [SOURCE_COLUMN])
-            .size()
-            .unstack(SOURCE_COLUMN, fill_value=0)
-            .reindex(columns=[first, second], fill_value=0)
-        )
-        mismatch = counts[first] != counts[second]
-        different = {str(v) for v in counts.index[mismatch].get_level_values("Invoice")}
 
     start = df.loc[is_second, "InvoiceDate"].min()
     end = df.loc[is_first, "InvoiceDate"].max()
